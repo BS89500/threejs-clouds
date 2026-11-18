@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Three.js Minimal Scene</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+
+    <!-- Load Three.js from a CDN -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+
+        }
+      }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { Sky } from 'three/addons/objects/Sky.js';
+
+        
+        const loader = new GLTFLoader();
+
+
+        class EnvironmentBuilder {
+            constructor() {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                document.body.appendChild(this.renderer.domElement);
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.camera.position.set(0, 20, 20);
+                this.animate = this.animate.bind(this);
+                
+                // Arrays to keep track of updatable or selectable objects
+                this.updatableObjects = [];
+                this.selectableObjects = [];
+            }
+
+            // 1. The Master Initialization Function
+            async buildWorld() {
+                // Run cheap, synchronous setups immediately
+                this.setupLighting();
+                this.setupObjectSelection();
+                await this.setupProceduralClouds();
+                // Wait for heavier external geometry to load before starting the render loop
+                await this.loadExternalModels();
+                this.SkyBox();
+                console.log("World loaded successfully. Starting engine.");
+                this.animate();
+            }
+            setupObjectSelection() {
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                
+                if (!this.selectableObjects) {
+                    this.selectableObjects = [];
+                }
+
+                // FIX 1 & 2: Use the canvas, and listen for 'click' instead of 'pointerdown'
+                this.renderer.domElement.addEventListener('click', (event) => {
+                    
+                    // Log to prove the click is actually firing!
+                    console.log("Canvas clicked! Checking objects...", this.selectableObjects.length);
+
+                    // FIX 3: If the array is empty, warn yourself in the console
+                    if (this.selectableObjects.length === 0) {
+                        console.warn("Raycaster fired, but there are no objects in this.selectableObjects!");
+                        return;
+                    }
+
+                    // Get the exact size and position of the canvas on the screen
+                    const rect = this.renderer.domElement.getBoundingClientRect();
+
+                    // Calculate mouse position relative to the canvas
+                    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+                    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+                    this.raycaster.setFromCamera(this.mouse, this.camera);
+
+                    const intersects = this.raycaster.intersectObjects(this.selectableObjects, true);
+
+                    if (intersects.length > 0) {
+                        const selectedObject = intersects[0].object;
+                        console.log("Success! You clicked:", selectedObject.name || selectedObject);
+                        console.log(intersects.length);
+                        
+                        if (selectedObject.material && selectedObject.material.color) {
+                             //selectedObject.material.color.setHex(0xff0000); 
+                        }
+                    } else {
+                        console.log("Raycaster fired, but missed all selectable objects.");
+                    }
+
+                    if(intersects.length == 0){
+                        console.log(intersects.length);
+
+                    }
+                });
+            }
+            SkyBox(){
+                const sky = new Sky();
+                sky.scale.setScalar(10000);
+                this.scene.add(sky);
+
+                // 2. Configure parameters (sun position, turbidity, etc.)
+                const ph = THREE.MathUtils.degToRad(88); // Sun elevation
+                const thet = THREE.MathUtils.degToRad(180); // Sun rotation
+                const sunPosition = new THREE.Vector3();
+                sunPosition.setFromSphericalCoords(1, ph, thet);
+
+                sky.material.uniforms['sunPosition'].value.copy(sunPosition);
+            }
+            // 2. Lighting Setup
+            setupLighting() {
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+                directionalLight.position.set(50, 100, 50);
+                
+                this.scene.add(ambientLight, directionalLight);
+            }
+
+            // 3. Procedural Generation Setup
+            async setupProceduralClouds() {
+                const vsResponse = await fetch('./shaders/cloudVertexShader.glsl');
+                const cloudVertexShader = await vsResponse.text();  
+                const fsResponse = await fetch('./shaders/cloudFragmentShader.glsl');
+                const cloudFragmentShader = await fsResponse.text();
+
+                const geometry = new THREE.BoxGeometry(40, 10, 40);
+                // Use BackSide so you can render the inside of the box when the camera is inside it
+                const material = new THREE.ShaderMaterial({
+                    vertexShader: cloudVertexShader,
+                    fragmentShader: cloudFragmentShader,
+                    uniforms: {
+                        uTime: { value: 0 },
+                        uCameraPosition: { value: this.camera.position },
+                        uSunPosition: { value: new THREE.Vector3(50, 50, 50) },
+                        uInverseModelMatrix: { value: new THREE.Matrix4() } // <--- Add this
+                    },
+                    side: THREE.BackSide,
+                    transparent: true,
+                    depthWrite: false
+                });
+                const cloudMesh = new THREE.Mesh(geometry, material);
+                cloudMesh.position.y = 2;
+                this.scene.add(cloudMesh);
+                this.updatableObjects.push(cloudMesh);
+                this.selectableObjects.push(cloudMesh);
+
+            }
+
+            // 4. External Asset Loading (Blender Models)
+            async loadExternalModels() {
+                const loader = new GLTFLoader();
+                
+                try {
+                    // Load an optimized GLB file exported from Blender
+                    const gltf = await loader.loadAsync('assets/models/terrain.glb');
+                    const model = gltf.scene;
+
+                    // Optional: Iterate through the loaded meshes to check polygon counts
+                    // or apply specific material tweaks (like custom UV mapping adjustments)
+                    let totalVertices = 0;
+                    model.traverse((child) => {
+                        if (child.isMesh) {
+                            totalVertices += child.geometry.attributes.position.count;
+                            // Make meshes cast/receive shadows, etc.
+                            child.castShadow = true; 
+                        }
+                    });
+                    console.log(`Loaded model with ${totalVertices} vertices.`);
+
+                   //s this.scene.add(model);
+                    this.selectableObjects.push(model);
+                } catch (error) {
+                    console.error("Failed to load 3D assets:", error);
+                }
+            }
+
+            // 5. The Render Loop
+            animate() {
+                requestAnimationFrame(this.animate);
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                 // Update the inverse matrix so the shader knows where the box is
+                    //this.cloudMesh.updateMatrixWorld();
+                    //material.uniforms.uInverseModelMatrix.value.copy(cloudMesh.matrixWorld).invert();
+                // Update any procedural shaders or moving objects
+                this.updatableObjects.forEach(obj => {
+                    if (obj.material && obj.material.uniforms) {
+                        // 1. Update the time uniform (if you are animating the clouds)
+                        if (obj.material.uniforms.uTime) {
+                            obj.material.uniforms.uTime.value += 0.01;
+                        }
+
+                        // 2. Update the physical Mesh's matrix in the world
+                        obj.updateMatrixWorld(true);
+
+                        // 3. Hand the inverted matrix to the shader
+                        if (obj.material.uniforms.uInverseModelMatrix) {
+                            obj.material.uniforms.uInverseModelMatrix.value
+                                .copy(obj.matrixWorld)
+                                .invert(); 
+                        }
+                    }
+                });
+
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // Instantiate and start the world build
+        const app = new EnvironmentBuilder();
+        app.buildWorld();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "sublime-text",
+  "version": "1.0.0",
+  "description": "",
+  "main": "vite.config.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "three": "^0.185.1",
+    "vite": "^8.1.5",
+    "vite-plugin-glsl": "^1.6.0"
+  }
+}
